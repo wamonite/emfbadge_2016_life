@@ -16,7 +16,7 @@ FRAME_DELAY = 100  # ms
 
 
 def get_random(count):
-    return int(onboard.get_temperature() * 1000) % count
+    return pyb.rng() % count
 
 
 class Cell(object):
