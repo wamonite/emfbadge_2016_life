@@ -2,36 +2,23 @@
 ### Description: Conway's Game of Life
 ### Category: uncategorised
 ### License: MIT
-### Appname: life by wamonite
-### Built-in: no
+### Appname: life
 
-import array
-try:
-    import pyb
-    import ugfx
-    import buttons
-    import onboard
-    COLOUR_BACK = ugfx.BLACK
-    COLOUR_LIST = [ugfx.RED, ugfx.GREEN, ugfx.BLUE]
-    RUNNING_ON_BADGE = True
+import pyb
+import ugfx
+import buttons
+import onboard
 
-except ImportError:
-    import random
-    from time import sleep
-    COLOUR_BACK = '0'
-    COLOUR_LIST = ['.', ',']
-    RUNNING_ON_BADGE = False
-
-DEFAULT_WIDTH = 20
-DEFAULT_HEIGHT = 20
-PIXEL_WIDTH = 2
-PIXEL_HEIGHT = 2
+COLOUR_BACK = ugfx.BLACK
+COLOUR_LIST = [ugfx.RED, ugfx.GREEN, ugfx.BLUE]
+PIXEL_WIDTH = 4
+PIXEL_HEIGHT = 4
 FRAME_DELAY = 100  # ms
 HASH_COUNT_LIMIT = 20
 
 
 def get_random(count):
-    return pyb.rng() % count if RUNNING_ON_BADGE else random.randint(0, count - 1)
+    return pyb.rng() % count
 
 
 def get_colour(colour_current = None):
@@ -45,12 +32,11 @@ class BitArray(object):
 
     def __init__(self, size):
         self._size = size
-        self._size_elements = size >> 5
-        if size & 32:
+        self._size_elements = size >> 3
+        if size % 8:
             self._size_elements += 1
 
-        self._array = array.array('I', [0] * self._size_elements)
-        assert self._array.itemsize == 4
+        self._array = bytearray([0] * self._size_elements)
 
     @property
     def size(self):
@@ -58,34 +44,29 @@ class BitArray(object):
 
     @property
     def size_bytes(self):
-        return self._size_elements * self._array.itemsize
+        return self._size_elements
 
     def test_bit(self, bit_index):
-        element = bit_index >> 5
-        offset = bit_index & 31
+        element = bit_index >> 3
+        offset = bit_index % 8
         mask = 1 << offset
         return bool(self._array[element] & mask)
 
     def set_bit(self, bit_index):
-        element = bit_index >> 5
-        offset = bit_index & 31
+        element = bit_index >> 3
+        offset = bit_index % 8
         mask = 1 << offset
         self._array[element] |= mask
 
     def clear_bit(self, bit_index):
-        element = bit_index >> 5
-        offset = bit_index & 31
+        element = bit_index >> 3
+        offset = bit_index % 8
         mask = ~(1 << offset)
         self._array[element] &= mask
 
     def randomise(self):
-        if RUNNING_ON_BADGE:
-            # TODO
-            pass
-
-        else:
-            for idx in range(self._size_elements):
-                self._array[idx] = random.getrandbits(32)
+        for idx in range(self._size_elements):
+            self._array[idx] = pyb.rng() & 0xff
 
     def hash(self):
         # noddy xor hash
@@ -98,8 +79,8 @@ class BitArray(object):
 class Grid:
 
     def __init__(self, width, height, pixel_width = PIXEL_WIDTH, pixel_height = PIXEL_HEIGHT, colour_fore = None, colour_back = None):
-        self._width = int(width / pixel_width)
-        self._height = int(height / pixel_height)
+        self._width = width // pixel_width
+        self._height = height // pixel_height
         self._colour_fore = colour_fore
         self._colour_back = colour_back
         self._pixel_width = pixel_width
@@ -121,9 +102,9 @@ class Grid:
 
     def add_glider(self, x = None, y = None):
         if x is None:
-            x = self._width / 2
+            x = self._width // 2
         if y is None:
-            y = self._height / 2
+            y = self._height // 2
 
         self.set_cell(x + 2, y, display_buffer = True)
         self.set_cell(x, y + 1, display_buffer = True)
@@ -196,66 +177,44 @@ class Grid:
         for y in range(self._height):
             line = ""
             for x in range(self._width):
-                line += self._colour_fore if self._cells_display.test_bit(idx) else self._colour_back
+                line += '.' if self._cells_display.test_bit(idx) else '0'
                 idx += 1
             print(line)
 
-    # TODO
-    # def display_badge(self):
-    #     for y in range(self._height):
-    #         for x in range(self._width):
-    #             cell = self.cells[x][y]
-    #             colour = self._colour_fore if cell.state else self._colour_back
-    #             ugfx.area(
-    #                 x * self._pixel_width,
-    #                 y * self._pixel_height,
-    #                 self._pixel_width,
-    #                 self._pixel_height,
-    #                 colour
-    #             )
+    def display_badge(self):
+        for y in range(self._height):
+            for x in range(self._width):
+                cell_alive = self.get_cell(x, y)
+                colour = self._colour_fore if cell_alive else self._colour_back
+                ugfx.area(
+                    x * self._pixel_width,
+                    y * self._pixel_height,
+                    self._pixel_width,
+                    self._pixel_height,
+                    colour
+                )
 
 
 def do_circle_of_life():
-    screen_width = DEFAULT_WIDTH
-    screen_height = DEFAULT_HEIGHT
+    ugfx.init()
+    buttons.init()
+    buttons.disable_menu_reset()
 
-    if RUNNING_ON_BADGE:
-        ugfx.init()
-        buttons.init()
-        buttons.disable_menu_reset()
-        screen_width = ugfx.width()
-        screen_height = ugfx.height()
-        ugfx.clear(ugfx.BLACK)
+    colour = get_colour()
+    grid = Grid(ugfx.width(), ugfx.height(), colour_fore = colour, colour_back = COLOUR_BACK)
+    grid.randomise()
 
-    grid = None
+    ugfx.clear(COLOUR_BACK)
+
     hash_count = 0
     hash_last = None
     hash_last_last = None
-    colour = get_colour()
-
     while True:
-        # initialise, if needed
-        if grid is None:
-            grid = Grid(screen_width, screen_height, colour_fore = colour, colour_back = COLOUR_BACK)
-            grid.randomise()
-
         # display
-        if RUNNING_ON_BADGE:
-            grid.display_badge()
+        grid.display_badge()
+        # grid.display_text()
 
-            pyb.delay(FRAME_DELAY)
-
-            pyb.wfi()
-            if buttons.is_triggered("BTN_A") or buttons.is_triggered("BTN_B"):
-                grid = None
-
-            if buttons.is_triggered("BTN_MENU"):
-                break
-
-        else:
-            grid.display_text()
-
-            sleep(float(FRAME_DELAY) / 1000.0)
+        # pyb.delay(FRAME_DELAY)
 
         # randomise, if needed
         hash_val = grid.hash()
@@ -278,8 +237,14 @@ def do_circle_of_life():
         grid.next_generation()
         grid.swap_cell_buffers()
 
-try:
-    do_circle_of_life()
+        pyb.wfi()
+        if buttons.is_triggered("BTN_A") or buttons.is_triggered("BTN_B"):
+            colour = get_colour(colour)
+            grid.set_colour(colour)
+            grid.randomise()
 
-except KeyboardInterrupt:
-    pass
+        if buttons.is_triggered("BTN_MENU"):
+            break
+
+
+do_circle_of_life()
