@@ -13,7 +13,6 @@ COLOUR_BACK = ugfx.BLACK
 COLOUR_LIST = [ugfx.RED, ugfx.GREEN, ugfx.BLUE]
 PIXEL_WIDTH = 4
 PIXEL_HEIGHT = 4
-FRAME_DELAY = 100  # ms
 HASH_COUNT_LIMIT = 20
 
 
@@ -36,7 +35,8 @@ class BitArray(object):
         if size % 8:
             self._size_elements += 1
 
-        self._array = bytearray([0] * self._size_elements)
+        self._array = None
+        self.clear()
 
     @property
     def size(self):
@@ -45,6 +45,10 @@ class BitArray(object):
     @property
     def size_bytes(self):
         return self._size_elements
+
+    def clear(self):
+        self._array = None
+        self._array = bytearray([0] * self._size_elements)
 
     def test_bit(self, bit_index):
         element = bit_index >> 3
@@ -64,16 +68,30 @@ class BitArray(object):
         mask = ~(1 << offset)
         self._array[element] &= mask
 
+    @micropython.viper
     def randomise(self):
-        for idx in range(self._size_elements):
-            self._array[idx] = pyb.rng() & 0xff
+        array = ptr8(self._array)
+        idx = int(self._size_elements)
+        while idx:
+            val = int(pyb.rng()) & 0xff
+            array[idx] = val
+            idx -= 1
 
-    def hash(self):
+    @micropython.viper
+    def hash(self) -> int:
         # noddy xor hash
         val = 0
-        for idx in range(self._size_elements):
-            val = val ^ self._array[idx]
+        array = ptr8(self._array)
+        idx = int(self._size_elements)
+        while idx:
+            val = val ^ array[idx]
+            idx -= 1
         return val
+
+    @micropython.viper
+    def get_block(self, block_index: int) -> int:
+        array = ptr8(self._array)
+        return array[block_index]
 
 
 class Grid:
@@ -181,18 +199,51 @@ class Grid:
                 idx += 1
             print(line)
 
+    @micropython.native
     def display_badge(self):
-        for y in range(self._height):
-            for x in range(self._width):
-                cell_alive = self.get_cell(x, y)
-                colour = self._colour_fore if cell_alive else self._colour_back
+        x = 0
+        y = 0
+        x_pixel = 0
+        y_pixel = 0
+        block_idx = 0
+        block_idx_limit = self._cells_display.size_bytes
+        cells = self._cells_display
+        width = self._width
+        colour_fore = self._colour_fore
+        colour_back = self._colour_back
+        pixel_width = self._pixel_width
+        pixel_height = self._pixel_height
+        hash_val = 0
+        while block_idx < block_idx_limit:
+            cell_block = cells.get_block(block_idx)
+            hash_val ^= cell_block
+            mask = 1
+            mask_idx = 0
+            while mask_idx < 8:
+                cell_alive = mask & cell_block
+                colour = colour_fore if cell_alive else colour_back
                 ugfx.area(
-                    x * self._pixel_width,
-                    y * self._pixel_height,
-                    self._pixel_width,
-                    self._pixel_height,
+                    x_pixel,
+                    y_pixel,
+                    pixel_width,
+                    pixel_height,
                     colour
                 )
+
+                mask <<= 1
+                mask_idx += 1
+
+                x += 1
+                x_pixel += pixel_width
+                if x == width:
+                    x = 0
+                    x_pixel = 0
+                    y += 1
+                    y_pixel += pixel_height
+
+            block_idx += 1
+
+        return hash_val
 
 
 def do_circle_of_life():
@@ -211,13 +262,9 @@ def do_circle_of_life():
     hash_last_last = None
     while True:
         # display
-        grid.display_badge()
-        # grid.display_text()
-
-        # pyb.delay(FRAME_DELAY)
+        hash_val = grid.display_badge()
 
         # randomise, if needed
-        hash_val = grid.hash()
         if hash_val == hash_last_last:
             hash_count += 1
 
@@ -237,6 +284,7 @@ def do_circle_of_life():
         grid.next_generation()
         grid.swap_cell_buffers()
 
+        # buttons
         pyb.wfi()
         if buttons.is_triggered("BTN_A") or buttons.is_triggered("BTN_B"):
             colour = get_colour(colour)
